@@ -16,6 +16,10 @@ DIB_RGB_COLORS = 0    # CreateDIBSection 顏色表用 RGB 值
 
 DEFAULT_DPI = 200
 
+# A4 標準尺寸（mm）
+A4_WIDTH_MM  = 210.0
+A4_HEIGHT_MM = 297.0
+
 # ── 修正 64 位元 GDI 函式簽章（避免 handle 截斷問題） ──────────────────────────
 # 在 64 位元 Windows 上，HANDLE 為 8 bytes，ctypes 預設 restype = c_int（4 bytes）
 # 會導致 handle 值截斷，造成後續 GDI 呼叫失敗。
@@ -108,14 +112,9 @@ def _emf_frame_rect(emf_bytes: bytes) -> tuple[int, int, int, int]:
 
 def _render_page(emf: bytes, dpi: int) -> Image.Image:
     """將單一 EMF 頁面渲染為 PIL Image（RGB）。"""
-    # 1. 從 rclFrame 計算實體尺寸（mm）
-    left, top, right, bottom = _emf_frame_rect(emf)
-    width_mm  = (right  - left) / 100.0   # 0.01mm → mm
-    height_mm = (bottom - top)  / 100.0
-
-    # 2. 計算輸出像素尺寸
-    width_px  = max(1, round(width_mm  * dpi / 25.4))
-    height_px = max(1, round(height_mm * dpi / 25.4))
+    # 固定以 A4 尺寸輸出（rclFrame 常含非標準值，直接指定 A4 確保比例正確）
+    width_px  = max(1, round(A4_WIDTH_MM  * dpi / 25.4))
+    height_px = max(1, round(A4_HEIGHT_MM * dpi / 25.4))
 
     # 3. 建立記憶體 DC（與螢幕 DC 相容）
     screen_dc = _user32.GetDC(0)
