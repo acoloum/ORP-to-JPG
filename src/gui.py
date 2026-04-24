@@ -1,9 +1,15 @@
 """tkinter GUI。"""
 from __future__ import annotations
+import queue
+import threading
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from tkinterdnd2 import TkinterDnD, DND_FILES
 from pathlib import Path
+from src.converter import (
+    OutputMode, ConflictPolicy, ProgressEvent, BatchSummary,
+    convert_batch,
+)
 
 
 class App:
@@ -83,6 +89,22 @@ class App:
         # 拖放支援
         self.listbox.drop_target_register(DND_FILES)
         self.listbox.dnd_bind("<<Drop>>", self._on_drop)
+
+        # ---- 開始按鈕 ----
+        self.start_btn = ttk.Button(main, text="開始轉檔", command=self._start)
+        self.start_btn.pack(pady=10)
+
+        # ---- 進度 ----
+        self.progress = ttk.Progressbar(main, mode="determinate", length=560)
+        self.progress.pack()
+        self.status_label = ttk.Label(main, text="")
+        self.status_label.pack(anchor="w", pady=2)
+
+        # ---- Worker 通訊 ----
+        self._ui_queue: queue.Queue = queue.Queue()
+        self._cancel_event = None
+        self._worker_thread = None
+        self.root.after(100, self._poll_queue)
 
     def _pick_files(self) -> None:
         """開啟檔案對話框，讓使用者選取 QRP 檔案。"""
@@ -172,6 +194,94 @@ class App:
         for f in self.files:
             self.listbox.insert("end", f.name)
         self.count_label.config(text=f"已選取：{len(self.files)} 個檔案")
+
+    def _start(self) -> None:
+        """驗證輸入、建立 worker 執行緒並啟動批次轉檔。"""
+        if not self.files:
+            messagebox.showwarning("無檔案", "請先選取要轉換的 QRP 檔")
+            return
+        mode = OutputMode(self.output_mode.get())
+        custom = None
+        if mode == OutputMode.CUSTOM:
+            txt = self.custom_dir_var.get().strip()
+            if not txt:
+                messagebox.showwarning("未指定", "請選擇輸出資料夾")
+                return
+            custom = Path(txt)
+        policy = ConflictPolicy(self.conflict_policy.get())
+
+        self.start_btn.config(state="disabled", text="轉檔中...")
+        self.progress.config(maximum=len(self.files), value=0)
+        self._cancel_event = threading.Event()
+        self._worker_thread = threading.Thread(
+            target=self._run_batch,
+            args=(list(self.files), mode, custom, policy),
+            daemon=True,
+        )
+        self._worker_thread.start()
+
+    def _run_batch(self, files, mode, custom, policy) -> None:
+        """Worker 執行緒：呼叫 convert_batch 並透過 queue 回傳進度。"""
+        def progress(event: ProgressEvent) -> None:
+            self._ui_queue.put(("progress", event))
+
+        # 衝突 callback：透過 queue 請主執行緒跳對話框
+        def conflict_cb(path):
+            # Task 15 會實作，先用預設覆蓋
+            from src.converter import ConflictDecision, ConflictAction
+            return ConflictDecision(action=ConflictAction.OVERWRITE)
+
+        try:
+            summary = convert_batch(
+                sources=files, output_mode=mode,
+                custom_output_dir=custom,
+                conflict_policy=policy,
+                conflict_callback=conflict_cb,
+                progress_callback=progress,
+                cancel_event=self._cancel_event,
+            )
+            self._ui_queue.put(("done", summary))
+        except Exception as e:
+            self._ui_queue.put(("error", str(e)))
+
+    def _poll_queue(self) -> None:
+        """每 100ms 輪詢 UI 訊息佇列，處理 worker 發來的事件。"""
+        try:
+            while True:
+                kind, payload = self._ui_queue.get_nowait()
+                if kind == "progress":
+                    self._handle_progress(payload)
+                elif kind == "done":
+                    self._handle_done(payload)
+                elif kind == "error":
+                    messagebox.showerror("錯誤", payload)
+                    self._reset_ui()
+        except queue.Empty:
+            pass
+        self.root.after(100, self._poll_queue)
+
+    def _handle_progress(self, event: ProgressEvent) -> None:
+        """更新進度列與狀態標籤。"""
+        if event.kind == "file_start":
+            self.status_label.config(text=f"正在轉換 {event.source.name}...")
+        elif event.kind == "file_done":
+            self.progress.config(value=event.index + 1)
+
+    def _handle_done(self, summary: BatchSummary) -> None:
+        """轉檔完成後重置 UI 並顯示簡易摘要（Task 16 會替換為完整對話框）。"""
+        self._reset_ui()
+        # Task 16 會替換為完整摘要對話框
+        messagebox.showinfo(
+            "完成",
+            f"成功：{summary.success_count}\n"
+            f"跳過：{summary.skipped_count}\n"
+            f"失敗：{summary.failed_count}",
+        )
+
+    def _reset_ui(self) -> None:
+        """重置 UI 到可操作狀態。"""
+        self.start_btn.config(state="normal", text="開始轉檔")
+        self.status_label.config(text="")
 
 
 def run() -> None:
