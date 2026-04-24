@@ -3,7 +3,6 @@ from __future__ import annotations
 from typing import Callable
 import os
 import queue
-import subprocess
 import threading
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
@@ -380,9 +379,10 @@ class App:
         if successful:
             folder = successful[0].parent
             def open_folder() -> None:
-                subprocess.run(["explorer", str(folder)])
+                os.startfile(str(folder))
             open_folder_fn = open_folder
-        SummaryDialog(self.root, summary, open_folder_fn)
+        dlg = SummaryDialog(self.root, summary, open_folder_fn)
+        self.root.wait_window(dlg)
 
     def _reset_ui(self) -> None:
         """重置 UI 到可操作狀態。"""
