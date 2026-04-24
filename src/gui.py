@@ -243,6 +243,12 @@ class App:
     def _start(self) -> None:
         """驗證輸入、建立 worker 執行緒並啟動批次轉檔。"""
         self._apply_all_action = None
+        # 清空前次批次可能遺留的殘留回應
+        while not self._conflict_response.empty():
+            try:
+                self._conflict_response.get_nowait()
+            except queue.Empty:
+                break
         if not self.files:
             messagebox.showwarning("無檔案", "請先選取要轉換的 QRP 檔")
             return
