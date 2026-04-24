@@ -1,8 +1,11 @@
+import threading
 from pathlib import Path
+from unittest.mock import patch
 from src.converter import (
     OutputMode, ConflictPolicy, ConflictAction,
     ConflictDecision, FileResult, BatchSummary,
     resolve_output_path, resolve_conflict,
+    convert_batch,
 )
 
 
@@ -88,3 +91,97 @@ def test_conflict_ask_invokes_callback(tmp_path):
     _target, action = resolve_conflict(existing, ConflictPolicy.ASK, cb)
     assert calls == [existing]
     assert action == ConflictAction.SKIP
+
+
+def test_batch_continues_after_single_failure(tmp_path, monkeypatch):
+    # 造 3 個 QRP 假檔：第 2 個會失敗
+    src_dir = tmp_path / "src"
+    src_dir.mkdir()
+    files = []
+    for i in range(3):
+        f = src_dir / f"{i}.QRP"
+        f.write_bytes(b"stub")
+        files.append(f)
+
+    def fake_parse(path):
+        if "1.QRP" in str(path):
+            from src.qrp_parser import QrpParseError
+            raise QrpParseError("壞檔")
+        return [b"emf-stub"]
+
+    def fake_render(pages, output_path, doc_name="Report"):
+        Path(output_path).write_bytes(b"%PDF-fake")
+
+    monkeypatch.setattr("src.converter.parse_qrp", fake_parse)
+    monkeypatch.setattr("src.converter.render_pdf", fake_render)
+
+    summary = convert_batch(
+        sources=files,
+        output_mode=OutputMode.SAME_FOLDER,
+        custom_output_dir=None,
+        conflict_policy=ConflictPolicy.OVERWRITE,
+        conflict_callback=None,
+        progress_callback=None,
+        cancel_event=None,
+    )
+    assert summary.success_count == 2
+    assert summary.failed_count == 1
+    assert not summary.cancelled
+
+
+def test_batch_honors_cancel_event(tmp_path, monkeypatch):
+    src_dir = tmp_path / "src"
+    src_dir.mkdir()
+    files = [src_dir / f"{i}.QRP" for i in range(5)]
+    for f in files:
+        f.write_bytes(b"stub")
+
+    cancel = threading.Event()
+    processed = []
+
+    def fake_parse(path):
+        processed.append(path)
+        if len(processed) == 2:
+            cancel.set()  # 第 2 檔處理完後取消
+        return [b"emf"]
+
+    def fake_render(pages, output_path, doc_name="Report"):
+        Path(output_path).write_bytes(b"%PDF-")
+
+    monkeypatch.setattr("src.converter.parse_qrp", fake_parse)
+    monkeypatch.setattr("src.converter.render_pdf", fake_render)
+
+    summary = convert_batch(
+        sources=files,
+        output_mode=OutputMode.SAME_FOLDER,
+        custom_output_dir=None,
+        conflict_policy=ConflictPolicy.OVERWRITE,
+        conflict_callback=None,
+        progress_callback=None,
+        cancel_event=cancel,
+    )
+    assert summary.cancelled
+    assert len(processed) == 2
+    assert summary.success_count == 2
+
+
+def test_batch_emits_progress_events(tmp_path, monkeypatch):
+    f = tmp_path / "only.QRP"
+    f.write_bytes(b"stub")
+    monkeypatch.setattr("src.converter.parse_qrp", lambda p: [b"emf"])
+    monkeypatch.setattr("src.converter.render_pdf",
+                        lambda pages, output_path, doc_name="Report":
+                            Path(output_path).write_bytes(b"%PDF-"))
+
+    events = []
+    convert_batch(
+        sources=[f],
+        output_mode=OutputMode.SAME_FOLDER,
+        custom_output_dir=None,
+        conflict_policy=ConflictPolicy.OVERWRITE,
+        conflict_callback=None,
+        progress_callback=events.append,
+        cancel_event=None,
+    )
+    kinds = [e.kind for e in events]
+    assert kinds == ["batch_start", "file_start", "file_done", "batch_end"]

@@ -6,6 +6,9 @@ from pathlib import Path
 from typing import Callable, Literal
 import threading
 
+from src.qrp_parser import parse_qrp, QrpParseError
+from src.pdf_renderer import render_pdf, PdfRenderError
+
 
 class OutputMode(Enum):
     SAME_FOLDER = "same"
@@ -125,3 +128,76 @@ def resolve_conflict(
     if decision.action == ConflictAction.RENAME:
         return _next_available_rename(target), ConflictAction.RENAME
     return target, decision.action
+
+
+def convert_batch(
+    sources: list[Path],
+    output_mode: OutputMode,
+    custom_output_dir: Path | None,
+    conflict_policy: ConflictPolicy,
+    conflict_callback: ConflictCallback | None,
+    progress_callback: ProgressCallback | None,
+    cancel_event: threading.Event | None,
+) -> BatchSummary:
+    """執行批次轉檔。單檔失敗不中斷批次；支援取消。"""
+    summary = BatchSummary()
+    total = len(sources)
+
+    def emit(event: ProgressEvent) -> None:
+        if progress_callback is not None:
+            progress_callback(event)
+
+    emit(ProgressEvent(kind="batch_start", total=total))
+
+    effective_policy = conflict_policy
+
+    for idx, source in enumerate(sources):
+        if cancel_event is not None and cancel_event.is_set():
+            summary.cancelled = True
+            break
+
+        emit(ProgressEvent(kind="file_start", index=idx, total=total, source=source))
+
+        result = _convert_one(
+            source, output_mode, custom_output_dir,
+            effective_policy, conflict_callback,
+        )
+
+        if result.status == "success" and conflict_policy == ConflictPolicy.ASK:
+            pass
+
+        summary.results.append(result)
+        emit(ProgressEvent(
+            kind="file_done", index=idx, total=total,
+            source=source, result=result,
+        ))
+
+    emit(ProgressEvent(kind="batch_end", summary=summary))
+    return summary
+
+
+def _convert_one(
+    source: Path,
+    output_mode: OutputMode,
+    custom_output_dir: Path | None,
+    policy: ConflictPolicy,
+    callback: ConflictCallback | None,
+) -> FileResult:
+    """轉換單一 QRP 檔為 PDF；失敗時回傳 failed 狀態而非拋出例外。"""
+    try:
+        target = resolve_output_path(source, output_mode, custom_output_dir)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        final_path, action = resolve_conflict(target, policy, callback)
+        if action == ConflictAction.SKIP:
+            return FileResult(source=source, output=None, status="skipped")
+        if action == ConflictAction.CANCEL:
+            return FileResult(source=source, output=None, status="skipped",
+                              error="使用者取消")
+        pages = parse_qrp(source)
+        render_pdf(pages, final_path, doc_name=source.stem)
+        return FileResult(source=source, output=final_path, status="success")
+    except (QrpParseError, PdfRenderError) as e:
+        return FileResult(source=source, output=None, status="failed", error=str(e))
+    except Exception as e:
+        return FileResult(source=source, output=None, status="failed",
+                          error=f"未預期錯誤：{e}")
