@@ -1,7 +1,9 @@
 """tkinter GUI。"""
 from __future__ import annotations
 from typing import Callable
+import os
 import queue
+import subprocess
 import threading
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
@@ -53,6 +55,43 @@ class ConflictDialog(tk.Toplevel):
     def _choose(self, action: ConflictAction) -> None:
         self.result = ConflictDecision(action=action, apply_to_all=self.apply_all.get())
         self.destroy()
+
+
+class SummaryDialog(tk.Toplevel):
+    def __init__(self, parent: tk.Tk, summary: BatchSummary,
+                 open_folder: Callable[[], None] | None) -> None:
+        super().__init__(parent)
+        self.title("轉檔完成" if not summary.cancelled else "已取消")
+        self.resizable(False, False)
+        self.transient(parent)
+        self.grab_set()
+
+        frm = ttk.Frame(self, padding=12)
+        frm.pack()
+        ttk.Label(
+            frm,
+            text=f"成功：{summary.success_count}   "
+                 f"跳過：{summary.skipped_count}   "
+                 f"失敗：{summary.failed_count}",
+            font=("Microsoft JhengHei", 10, "bold"),
+        ).pack(anchor="w")
+
+        failures = [r for r in summary.results if r.status == "failed"]
+        if failures:
+            ttk.Label(frm, text="失敗清單：").pack(anchor="w", pady=(8, 2))
+            box = tk.Text(frm, height=6, width=60, wrap="word")
+            box.pack()
+            for r in failures:
+                box.insert("end", f"• {r.source.name}：{r.error}\n")
+            box.config(state="disabled")
+
+        btn_row = ttk.Frame(frm)
+        btn_row.pack(pady=8)
+        if open_folder is not None and summary.success_count > 0:
+            ttk.Button(btn_row, text="開啟輸出資料夾",
+                       command=open_folder).pack(side="left", padx=4)
+        ttk.Button(btn_row, text="關閉",
+                   command=self.destroy).pack(side="left", padx=4)
 
 
 class App:
@@ -334,15 +373,16 @@ class App:
             self.progress.config(value=event.index + 1)
 
     def _handle_done(self, summary: BatchSummary) -> None:
-        """轉檔完成後重置 UI 並顯示簡易摘要（Task 16 會替換為完整對話框）。"""
+        """轉檔完成後重置 UI 並顯示摘要對話框。"""
         self._reset_ui()
-        # Task 16 會替換為完整摘要對話框
-        messagebox.showinfo(
-            "完成",
-            f"成功：{summary.success_count}\n"
-            f"跳過：{summary.skipped_count}\n"
-            f"失敗：{summary.failed_count}",
-        )
+        open_folder_fn = None
+        successful = [r.output for r in summary.results if r.status == "success"]
+        if successful:
+            folder = successful[0].parent
+            def open_folder() -> None:
+                subprocess.run(["explorer", str(folder)])
+            open_folder_fn = open_folder
+        SummaryDialog(self.root, summary, open_folder_fn)
 
     def _reset_ui(self) -> None:
         """重置 UI 到可操作狀態。"""
