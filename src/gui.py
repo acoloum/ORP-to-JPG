@@ -2,6 +2,7 @@
 from __future__ import annotations
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
+from tkinterdnd2 import TkinterDnD, DND_FILES
 from pathlib import Path
 
 
@@ -40,6 +41,10 @@ class App:
 
         self.count_label = ttk.Label(main, text="已選取：0 個檔案")
         self.count_label.pack(anchor="w")
+
+        # 拖放支援
+        self.listbox.drop_target_register(DND_FILES)
+        self.listbox.dnd_bind("<<Drop>>", self._on_drop)
 
     def _pick_files(self) -> None:
         """開啟檔案對話框，讓使用者選取 QRP 檔案。"""
@@ -80,6 +85,36 @@ class App:
             del self.files[i]
         self._refresh_list()
 
+    def _on_drop(self, event) -> None:
+        # event.data 可能是 "{path1} {path2}" 或空白分隔
+        raw = event.data
+        # tkinterdnd2 會把含空白的路徑用 {} 括起來
+        paths: list[Path] = []
+        token = ""
+        in_brace = False
+        for ch in raw:
+            if ch == "{":
+                in_brace = True
+                token = ""
+            elif ch == "}":
+                in_brace = False
+                if token:
+                    paths.append(Path(token))
+                    token = ""
+            elif ch == " " and not in_brace:
+                if token:
+                    paths.append(Path(token))
+                    token = ""
+            else:
+                token += ch
+        if token:
+            paths.append(Path(token))
+        qrp = [p for p in paths if p.suffix.lower() == ".qrp" and p.is_file()]
+        if not qrp:
+            messagebox.showinfo("忽略", "未偵測到 .QRP 檔")
+            return
+        self._add_files(qrp)
+
     def _refresh_list(self) -> None:
         """同步更新 Listbox 顯示內容與檔案計數標籤。"""
         self.listbox.delete(0, "end")
@@ -89,6 +124,6 @@ class App:
 
 
 def run() -> None:
-    root = tk.Tk()
+    root = TkinterDnD.Tk()
     App(root)
     root.mainloop()
