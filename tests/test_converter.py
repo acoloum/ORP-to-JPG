@@ -1,6 +1,5 @@
 import threading
 from pathlib import Path
-from unittest.mock import patch
 from src.converter import (
     OutputMode, ConflictPolicy, ConflictAction,
     ConflictDecision, FileResult, BatchSummary,

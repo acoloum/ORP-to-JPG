@@ -149,8 +149,6 @@ def convert_batch(
 
     emit(ProgressEvent(kind="batch_start", total=total))
 
-    effective_policy = conflict_policy
-
     for idx, source in enumerate(sources):
         if cancel_event is not None and cancel_event.is_set():
             summary.cancelled = True
@@ -158,13 +156,11 @@ def convert_batch(
 
         emit(ProgressEvent(kind="file_start", index=idx, total=total, source=source))
 
+        # ASK 策略的 apply_to_all 升級由 GUI 端的 callback 包裝器處理（Task 15）。
         result = _convert_one(
             source, output_mode, custom_output_dir,
-            effective_policy, conflict_callback,
+            conflict_policy, conflict_callback,
         )
-
-        if result.status == "success" and conflict_policy == ConflictPolicy.ASK:
-            pass
 
         summary.results.append(result)
         emit(ProgressEvent(
@@ -200,4 +196,4 @@ def _convert_one(
         return FileResult(source=source, output=None, status="failed", error=str(e))
     except Exception as e:
         return FileResult(source=source, output=None, status="failed",
-                          error=f"未預期錯誤：{e}")
+                          error=f"未預期錯誤（{type(e).__name__}）：{e}")
