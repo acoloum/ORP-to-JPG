@@ -89,3 +89,39 @@ def resolve_output_path(
             raise ValueError("自訂輸出模式必須提供 custom_dir")
         return Path(custom_dir) / stem
     raise ValueError(f"未知的 OutputMode: {mode}")
+
+
+def _next_available_rename(path: Path) -> Path:
+    """找到下一個 `<stem> (N)<suffix>` 可用檔名。"""
+    n = 1
+    while True:
+        candidate = path.with_name(f"{path.stem} ({n}){path.suffix}")
+        if not candidate.exists():
+            return candidate
+        n += 1
+
+
+def resolve_conflict(
+    target: Path,
+    policy: ConflictPolicy,
+    callback: ConflictCallback | None,
+) -> tuple[Path, ConflictAction]:
+    """根據策略決定最終輸出路徑與動作。
+
+    回傳 (最終路徑, 動作)；若動作為 SKIP 或 CANCEL，呼叫端應跳過寫入。
+    """
+    if not target.exists():
+        return target, ConflictAction.OVERWRITE
+    if policy == ConflictPolicy.OVERWRITE:
+        return target, ConflictAction.OVERWRITE
+    if policy == ConflictPolicy.SKIP:
+        return target, ConflictAction.SKIP
+    if policy == ConflictPolicy.RENAME:
+        return _next_available_rename(target), ConflictAction.RENAME
+    # ASK
+    if callback is None:
+        raise ValueError("ConflictPolicy.ASK 需要提供 callback")
+    decision = callback(target)
+    if decision.action == ConflictAction.RENAME:
+        return _next_available_rename(target), ConflictAction.RENAME
+    return target, decision.action
