@@ -71,3 +71,21 @@ class ProgressEvent:
     source: Path | None = None
     result: FileResult | None = None
     summary: BatchSummary | None = None
+
+
+def resolve_output_path(
+    source: Path,
+    mode: OutputMode,
+    custom_dir: Path | None,
+) -> Path:
+    """依模式決定 PDF 輸出路徑（不做衝突檢查，不建資料夾）。"""
+    stem = source.stem + ".pdf"
+    if mode == OutputMode.SAME_FOLDER:
+        return source.with_name(stem)
+    if mode == OutputMode.SUBFOLDER:
+        return source.parent / "PDF" / stem
+    if mode == OutputMode.CUSTOM:
+        if custom_dir is None:
+            raise ValueError("自訂輸出模式必須提供 custom_dir")
+        return Path(custom_dir) / stem
+    raise ValueError(f"未知的 OutputMode: {mode}")
