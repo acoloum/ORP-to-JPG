@@ -7,7 +7,7 @@ from typing import Callable, Literal
 import threading
 
 from src.qrp_parser import parse_qrp, QrpParseError
-from src.pdf_renderer import render_pdf, PdfRenderError
+from src.jpg_renderer import render_jpg, JpgRenderError
 
 
 class OutputMode(Enum):
@@ -81,12 +81,12 @@ def resolve_output_path(
     mode: OutputMode,
     custom_dir: Path | None,
 ) -> Path:
-    """依模式決定 PDF 輸出路徑（不做衝突檢查，不建資料夾）。"""
-    stem = source.stem + ".pdf"
+    """依模式決定 JPG 輸出路徑（不做衝突檢查，不建資料夾）。"""
+    stem = source.stem + ".jpg"
     if mode == OutputMode.SAME_FOLDER:
         return source.with_name(stem)
     if mode == OutputMode.SUBFOLDER:
-        return source.parent / "PDF" / stem
+        return source.parent / "JPG" / stem
     if mode == OutputMode.CUSTOM:
         if custom_dir is None:
             raise ValueError("自訂輸出模式必須提供 custom_dir")
@@ -179,7 +179,7 @@ def _convert_one(
     policy: ConflictPolicy,
     callback: ConflictCallback | None,
 ) -> FileResult:
-    """轉換單一 QRP 檔為 PDF；失敗時回傳 failed 狀態而非拋出例外。"""
+    """轉換單一 QRP 檔為 JPG；失敗時回傳 failed 狀態而非拋出例外。"""
     try:
         target = resolve_output_path(source, output_mode, custom_output_dir)
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -190,9 +190,9 @@ def _convert_one(
             return FileResult(source=source, output=None, status="skipped",
                               error="使用者取消")
         pages = parse_qrp(source)
-        render_pdf(pages, final_path, doc_name=source.stem)
-        return FileResult(source=source, output=final_path, status="success")
-    except (QrpParseError, PdfRenderError) as e:
+        outputs = render_jpg(pages, final_path)
+        return FileResult(source=source, output=outputs[0], status="success")
+    except (QrpParseError, JpgRenderError) as e:
         return FileResult(source=source, output=None, status="failed", error=str(e))
     except Exception as e:
         return FileResult(source=source, output=None, status="failed",

@@ -12,15 +12,15 @@ if exist "build" rmdir /s /q build
 set PY=.venv\Scripts\python.exe
 
 %PY% -m PyInstaller --noconfirm --onefile --windowed ^
-    --name "QRP轉PDF工具" ^
+    --name "QRP轉JPG工具" ^
     --collect-all tkinterdnd2 ^
     src\main.py
 
-if not exist "dist\QRP轉PDF工具.exe" (
-    echo 打包失敗：dist\QRP轉PDF工具.exe 未產生
+if not exist "dist\QRP轉JPG工具.exe" (
+    echo 打包失敗：dist\QRP轉JPG工具.exe 未產生
     exit /b 1
 )
 
 echo.
-echo 打包完成：dist\QRP轉PDF工具.exe
+echo 打包完成：dist\QRP轉JPG工具.exe
 endlocal

@@ -98,7 +98,7 @@ class App:
         self.root = root
         self.files: list[Path] = []
 
-        root.title("QRP 轉 PDF 工具")
+        root.title("QRP 轉 JPG 工具")
         root.geometry("600x500")
         root.resizable(False, False)
 
@@ -137,7 +137,7 @@ class App:
         ttk.Radiobutton(main, text="與原檔同資料夾", value="same",
                         variable=self.output_mode,
                         command=self._update_output_ui).pack(anchor="w")
-        ttk.Radiobutton(main, text="原資料夾下建立 PDF 子資料夾", value="subfolder",
+        ttk.Radiobutton(main, text="原資料夾下建立 JPG 子資料夾", value="subfolder",
                         variable=self.output_mode,
                         command=self._update_output_ui).pack(anchor="w")
 
