@@ -29,8 +29,14 @@ def parse_qrp(path: str | Path) -> list[bytes]:
         search_from = idx + len(EMF_SIGNATURE)
         if start < 0:
             continue
+        # 確保緩衝區有足夠空間容納 iType 欄位（防禦性檢查）
+        if start + TYPE_OFFSET + 4 > len(data):
+            continue
         (itype,) = struct.unpack_from("<I", data, start + TYPE_OFFSET)
         if itype != 1:
+            continue
+        # 確保緩衝區有足夠空間容納 nBytes 欄位（簽章在檔尾時 false-positive 略過）
+        if start + NBYTES_OFFSET + 4 > len(data):
             continue
         (nbytes,) = struct.unpack_from("<I", data, start + NBYTES_OFFSET)
         if nbytes == 0 or start + nbytes > len(data):
