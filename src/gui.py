@@ -42,6 +42,44 @@ class App:
         self.count_label = ttk.Label(main, text="已選取：0 個檔案")
         self.count_label.pack(anchor="w")
 
+        # 輸出位置
+        ttk.Label(main, text="輸出位置",
+                  font=("Microsoft JhengHei", 10, "bold")).pack(anchor="w", pady=(10, 2))
+
+        self.output_mode = tk.StringVar(value="same")
+        ttk.Radiobutton(main, text="與原檔同資料夾", value="same",
+                        variable=self.output_mode,
+                        command=self._update_output_ui).pack(anchor="w")
+        ttk.Radiobutton(main, text="原資料夾下建立 PDF 子資料夾", value="subfolder",
+                        variable=self.output_mode,
+                        command=self._update_output_ui).pack(anchor="w")
+
+        custom_row = ttk.Frame(main)
+        custom_row.pack(anchor="w", fill="x")
+        ttk.Radiobutton(custom_row, text="指定資料夾：", value="custom",
+                        variable=self.output_mode,
+                        command=self._update_output_ui).pack(side="left")
+        self.custom_dir_var = tk.StringVar()
+        self.custom_dir_entry = ttk.Entry(
+            custom_row, textvariable=self.custom_dir_var, state="disabled", width=40,
+        )
+        self.custom_dir_entry.pack(side="left", padx=4)
+        self.browse_btn = ttk.Button(
+            custom_row, text="瀏覽...", command=self._browse_output_dir, state="disabled",
+        )
+        self.browse_btn.pack(side="left")
+
+        # 衝突策略
+        ttk.Label(main, text="檔案已存在時",
+                  font=("Microsoft JhengHei", 10, "bold")).pack(anchor="w", pady=(10, 2))
+        self.conflict_policy = tk.StringVar(value="ask")
+        policy_row = ttk.Frame(main)
+        policy_row.pack(anchor="w")
+        for text, val in [("問我", "ask"), ("覆蓋", "overwrite"),
+                          ("跳過", "skip"), ("加編號", "rename")]:
+            ttk.Radiobutton(policy_row, text=text, value=val,
+                            variable=self.conflict_policy).pack(side="left", padx=2)
+
         # 拖放支援
         self.listbox.drop_target_register(DND_FILES)
         self.listbox.dnd_bind("<<Drop>>", self._on_drop)
@@ -114,6 +152,19 @@ class App:
             messagebox.showinfo("忽略", "未偵測到 .QRP 檔")
             return
         self._add_files(qrp)
+
+    def _update_output_ui(self) -> None:
+        """根據輸出模式選擇，啟用或停用指定資料夾的輸入框與瀏覽按鈕。"""
+        is_custom = self.output_mode.get() == "custom"
+        state = "normal" if is_custom else "disabled"
+        self.custom_dir_entry.config(state=state)
+        self.browse_btn.config(state=state)
+
+    def _browse_output_dir(self) -> None:
+        """開啟資料夾選取對話框，將結果填入指定資料夾欄位。"""
+        folder = filedialog.askdirectory(title="選擇輸出資料夾")
+        if folder:
+            self.custom_dir_var.set(folder)
 
     def _refresh_list(self) -> None:
         """同步更新 Listbox 顯示內容與檔案計數標籤。"""
