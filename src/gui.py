@@ -215,12 +215,12 @@ class App:
         self._cancel_event = threading.Event()
         self._worker_thread = threading.Thread(
             target=self._run_batch,
-            args=(list(self.files), mode, custom, policy),
+            args=(list(self.files), mode, custom, policy, self._cancel_event),
             daemon=True,
         )
         self._worker_thread.start()
 
-    def _run_batch(self, files, mode, custom, policy) -> None:
+    def _run_batch(self, files, mode, custom, policy, cancel_event) -> None:
         """Worker 執行緒：呼叫 convert_batch 並透過 queue 回傳進度。"""
         def progress(event: ProgressEvent) -> None:
             self._ui_queue.put(("progress", event))
@@ -238,7 +238,7 @@ class App:
                 conflict_policy=policy,
                 conflict_callback=conflict_cb,
                 progress_callback=progress,
-                cancel_event=self._cancel_event,
+                cancel_event=cancel_event,
             )
             self._ui_queue.put(("done", summary))
         except Exception as e:
@@ -258,7 +258,10 @@ class App:
                     self._reset_ui()
         except queue.Empty:
             pass
-        self.root.after(100, self._poll_queue)
+        try:
+            self.root.after(100, self._poll_queue)
+        except tk.TclError:
+            pass  # 視窗已銷毀，停止輪詢
 
     def _handle_progress(self, event: ProgressEvent) -> None:
         """更新進度列與狀態標籤。"""
