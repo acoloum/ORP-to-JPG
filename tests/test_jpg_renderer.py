@@ -10,59 +10,6 @@ from src.jpg_renderer import render_jpg, JpgRenderError, DEFAULT_DPI
 from src.qrp_parser import parse_qrp
 
 
-# ── 最小有效 EMF 組件（用於模擬測試） ──────────────────────────────────────────
-def _make_minimal_emf(width_01mm: int = 21000, height_01mm: int = 29700) -> bytes:
-    """產生最小有效的 EMF 記憶體物件。
-
-    EMF header 格式：
-      offset 0:  DWORD iType = 1 (EMR_HEADER)
-      offset 4:  DWORD nSize（含記錄大小）
-      offset 8:  RECT rclBounds (16 bytes)
-      offset 24: RECT rclFrame (left, top, right, bottom，單位 0.01mm)
-      offset 40: DWORD dSignature = 0x464D4520
-      offset 44: DWORD nVersion
-      offset 48: DWORD nBytes（檔案總大小）
-      offset 52: DWORD nRecords
-      offset 56: WORD  nHandles
-      offset 58: WORD  sReserved
-      offset 60: DWORD nDescription
-      offset 64: DWORD offDescription
-      offset 68: DWORD nPalEntries
-      offset 72: SIZEL szlDevice (2 × LONG)
-      offset 80: SIZEL szlMillimeters (2 × LONG)
-    後面接 EMR_EOF 記錄（iType=14，nSize=20）
-    """
-    # rclFrame: left=0, top=0, right=width, bottom=height
-    emr_header = struct.pack(
-        "<IIIIIIIIIIIIII IIIIIIII II II II II II II",
-        1,          # iType = EMR_HEADER
-        108,        # nSize = header record size
-        0, 0, width_01mm, height_01mm,   # rclBounds（4 × int32）
-        0, 0, width_01mm, height_01mm,   # rclFrame（4 × int32）
-        0x464D4520, # dSignature
-        0x00010000, # nVersion
-        108 + 20,   # nBytes = header + EOF
-        2,          # nRecords
-        1,          # nHandles
-        0,          # sReserved
-        0,          # nDescription
-        0,          # offDescription
-        0,          # nPalEntries
-        1024, 768,  # szlDevice
-        270, 203,   # szlMillimeters
-    )
-    emr_eof = struct.pack("<III IIII",
-        14,  # iType = EMR_EOF
-        20,  # nSize
-        0,   # nPalEntries
-        0,   # offPalEntries
-        20,  # nSizeLast（= nSize）
-    )
-    # 補齊 emr_header 至 108 位元組（struct.pack 可能不足）
-    emr_header = emr_header[:108].ljust(108, b"\x00")
-    return emr_header + emr_eof
-
-
 # ── 單元測試 ───────────────────────────────────────────────────────────────────
 
 def test_default_dpi_is_200():
@@ -161,3 +108,4 @@ def test_integration_render_real_qrp(sample_qrp_path, tmp_path):
     out = render_jpg(pages, tmp_path / "integration_out")
     assert all(p.exists() for p in out)
     assert all(p.stat().st_size > 0 for p in out)
+    assert all(p.stat().st_size > 50_000 for p in out), "JPG 檔案過小，可能渲染失敗"

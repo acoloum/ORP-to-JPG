@@ -19,6 +19,7 @@ DEFAULT_DPI = 200
 # ── 修正 64 位元 GDI 函式簽章（避免 handle 截斷問題） ──────────────────────────
 # 在 64 位元 Windows 上，HANDLE 為 8 bytes，ctypes 預設 restype = c_int（4 bytes）
 # 會導致 handle 值截斷，造成後續 GDI 呼叫失敗。
+import ctypes as _ct
 _gdi32 = windll.gdi32
 _user32 = windll.user32
 
@@ -28,7 +29,9 @@ _gdi32.CreateDIBSection.restype         = c_void_p
 _gdi32.SelectObject.restype             = c_void_p
 _gdi32.GetStockObject.restype           = c_void_p
 _gdi32.SetEnhMetaFileBits.restype       = c_void_p
+_gdi32.SetEnhMetaFileBits.argtypes      = [_ct.c_uint, _ct.c_char_p]
 _user32.GetDC.restype                   = c_void_p
+_user32.GetDC.argtypes                  = [_ct.c_void_p]
 
 # 回傳 BOOL 的函式
 _gdi32.PlayEnhMetaFile.restype          = BOOL
@@ -41,7 +44,6 @@ _user32.FillRect.restype                = c_int
 _user32.ReleaseDC.restype               = c_int
 
 # 設定接受 HANDLE 參數的函式 argtypes，避免 64 位元溢位
-import ctypes as _ct
 # CreateCompatibleDC(HDC hdc)
 _gdi32.CreateCompatibleDC.argtypes      = [c_void_p]
 # CreateDIBSection(HDC hdc, BITMAPINFO*, UINT, VOID**, HANDLE, DWORD)
@@ -149,7 +151,7 @@ def _render_page(emf: bytes, dpi: int) -> Image.Image:
             # 5. 將 DIB 選入記憶體 DC
             old_bmp = _gdi32.SelectObject(mem_dc, hbmp)
             # 注意：SelectObject 回傳先前物件，新建 DC 初始含預設點陣圖，回傳應為非 None
-            if old_bmp is None:
+            if not old_bmp:
                 raise JpgRenderError("SelectObject 失敗")
 
             # 6. 填白色背景
@@ -190,7 +192,7 @@ def _render_page(emf: bytes, dpi: int) -> Image.Image:
 
         finally:
             # 11. 釋放 GDI 物件（只有在 SelectObject 成功後才需要還原）
-            if old_bmp is not None:
+            if old_bmp:
                 _gdi32.SelectObject(mem_dc, old_bmp)
             _gdi32.DeleteObject(hbmp)
 
