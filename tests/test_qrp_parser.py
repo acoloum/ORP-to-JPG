@@ -20,3 +20,24 @@ def test_parse_handles_signature_near_eof(tmp_path):
     fake.write_bytes(b"\x00" * 42 + b" EMF")
     with pytest.raises(QrpParseError, match="不包含 EMF"):
         parse_qrp(fake)
+
+
+def test_parse_raises_when_no_emf(tmp_path):
+    fake = tmp_path / "bad.QRP"
+    fake.write_bytes(b"not a qrp file" * 100)
+    with pytest.raises(QrpParseError, match="不包含 EMF"):
+        parse_qrp(fake)
+
+
+def test_parse_raises_when_truncated(tmp_path, sample_qrp_path):
+    # 讀入範例，找到 EMF 起點，把 nbytes 改到超出檔尾
+    data = bytearray(sample_qrp_path.read_bytes())
+    idx = data.find(b" EMF")
+    start = idx - 40
+    # 將 nbytes 改成超大值
+    import struct
+    struct.pack_into("<I", data, start + 48, 9_999_999)
+    broken = tmp_path / "broken.QRP"
+    broken.write_bytes(bytes(data))
+    with pytest.raises(QrpParseError, match="損壞或截斷"):
+        parse_qrp(broken)
