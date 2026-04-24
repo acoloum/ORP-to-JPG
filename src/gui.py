@@ -2,7 +2,10 @@
 from __future__ import annotations
 from typing import Callable
 import os
+import platform
 import queue
+import subprocess
+import sys
 import threading
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
@@ -13,6 +16,17 @@ from src.converter import (
     ProgressEvent, BatchSummary,
     convert_batch,
 )
+
+
+def _open_folder(folder: Path) -> None:
+    """跨平台開啟資料夾（檔案總管 / Finder / xdg-open）。"""
+    system = platform.system()
+    if system == "Windows":
+        os.startfile(str(folder))  # type: ignore[attr-defined]
+    elif system == "Darwin":
+        subprocess.run(["open", str(folder)], check=False)
+    else:
+        subprocess.run(["xdg-open", str(folder)], check=False)
 
 
 class ConflictDialog(tk.Toplevel):
@@ -379,7 +393,7 @@ class App:
         if successful:
             folder = successful[0].parent
             def open_folder() -> None:
-                os.startfile(str(folder))
+                _open_folder(folder)
             open_folder_fn = open_folder
         dlg = SummaryDialog(self.root, summary, open_folder_fn)
         self.root.wait_window(dlg)
