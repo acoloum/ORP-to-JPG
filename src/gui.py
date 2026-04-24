@@ -1,5 +1,6 @@
 """tkinter GUI。"""
 from __future__ import annotations
+from typing import Callable
 import queue
 import threading
 import tkinter as tk
@@ -7,9 +8,51 @@ from tkinter import ttk, filedialog, messagebox
 from tkinterdnd2 import TkinterDnD, DND_FILES
 from pathlib import Path
 from src.converter import (
-    OutputMode, ConflictPolicy, ProgressEvent, BatchSummary,
+    OutputMode, ConflictPolicy, ConflictDecision, ConflictAction,
+    ProgressEvent, BatchSummary,
     convert_batch,
 )
+
+
+class ConflictDialog(tk.Toplevel):
+    """衝突對話框：modal，回傳 ConflictDecision。"""
+
+    def __init__(self, parent: tk.Tk, conflict_path: Path) -> None:
+        super().__init__(parent)
+        self.title("檔案已存在")
+        self.resizable(False, False)
+        self.transient(parent)
+        self.grab_set()
+        self.result: ConflictDecision | None = None
+
+        frm = ttk.Frame(self, padding=12)
+        frm.pack()
+        ttk.Label(frm, text=f"已有檔案：{conflict_path}",
+                  wraplength=400).pack(anchor="w", pady=4)
+
+        self.apply_all = tk.BooleanVar(value=False)
+        ttk.Checkbutton(frm, text="套用到後續所有衝突",
+                        variable=self.apply_all).pack(anchor="w", pady=4)
+
+        btn_row = ttk.Frame(frm)
+        btn_row.pack(pady=6)
+        for text, action in [
+            ("覆蓋", ConflictAction.OVERWRITE),
+            ("跳過", ConflictAction.SKIP),
+            ("自動加編號", ConflictAction.RENAME),
+            ("取消", ConflictAction.CANCEL),
+        ]:
+            ttk.Button(
+                btn_row, text=text,
+                command=lambda a=action: self._choose(a),
+            ).pack(side="left", padx=2)
+
+        self.protocol("WM_DELETE_WINDOW", lambda: self._choose(ConflictAction.CANCEL))
+        parent.wait_window(self)
+
+    def _choose(self, action: ConflictAction) -> None:
+        self.result = ConflictDecision(action=action, apply_to_all=self.apply_all.get())
+        self.destroy()
 
 
 class App:
@@ -102,6 +145,8 @@ class App:
 
         # ---- Worker 通訊 ----
         self._ui_queue: queue.Queue = queue.Queue()
+        self._conflict_response: queue.Queue = queue.Queue()
+        self._apply_all_action: ConflictAction | None = None
         self._cancel_event = None
         self._worker_thread = None
         self.root.after(100, self._poll_queue)
@@ -197,6 +242,7 @@ class App:
 
     def _start(self) -> None:
         """驗證輸入、建立 worker 執行緒並啟動批次轉檔。"""
+        self._apply_all_action = None
         if not self.files:
             messagebox.showwarning("無檔案", "請先選取要轉換的 QRP 檔")
             return
@@ -225,11 +271,16 @@ class App:
         def progress(event: ProgressEvent) -> None:
             self._ui_queue.put(("progress", event))
 
-        # 衝突 callback：透過 queue 請主執行緒跳對話框
-        def conflict_cb(path):
-            # Task 15 會實作，先用預設覆蓋
-            from src.converter import ConflictDecision, ConflictAction
-            return ConflictDecision(action=ConflictAction.OVERWRITE)
+        def conflict_cb(path: Path) -> ConflictDecision:
+            # 若已選擇 apply_to_all，直接回傳不再跳對話框
+            if self._apply_all_action is not None:
+                return ConflictDecision(action=self._apply_all_action,
+                                        apply_to_all=True)
+            self._ui_queue.put(("conflict", path))
+            decision: ConflictDecision = self._conflict_response.get()
+            if decision.apply_to_all:
+                self._apply_all_action = decision.action
+            return decision
 
         try:
             summary = convert_batch(
@@ -256,6 +307,12 @@ class App:
                 elif kind == "error":
                     messagebox.showerror("錯誤", payload)
                     self._reset_ui()
+                elif kind == "conflict":
+                    dlg = ConflictDialog(self.root, payload)
+                    decision = dlg.result or ConflictDecision(
+                        action=ConflictAction.CANCEL,
+                    )
+                    self._conflict_response.put(decision)
         except queue.Empty:
             pass
         try:
