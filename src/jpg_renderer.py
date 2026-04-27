@@ -17,6 +17,9 @@ DEFAULT_DPI = 200
 A4_WIDTH_MM  = 210.0
 A4_HEIGHT_MM = 297.0
 
+# pdftoppm 光柵化過取樣倍率（render 時用更高 DPI，downsample 提升銳利度）
+_RENDER_OVERSAMPLE = 1.5
+
 # 子程序逾時（秒）
 _LO_TIMEOUT = 120
 _PDFTOPPM_TIMEOUT = 60
@@ -92,22 +95,33 @@ def _pdf_to_png(pdf_path: Path, dpi: int, tmpdir: Path, pdftoppm_cmd: str) -> Pa
     return candidates[0]
 
 
+def _fit_to_a4(img: Image.Image, target_w: int, target_h: int) -> Image.Image:
+    """以 letterbox 方式將圖片置中於 A4 白底畫布，保留原始長寬比避免變形。"""
+    src_w, src_h = img.size
+    scale = min(target_w / src_w, target_h / src_h)
+    new_w = max(1, round(src_w * scale))
+    new_h = max(1, round(src_h * scale))
+    resized = img.resize((new_w, new_h), Image.LANCZOS)
+    canvas = Image.new("RGB", (target_w, target_h), "white")
+    canvas.paste(resized, ((target_w - new_w) // 2, (target_h - new_h) // 2))
+    return canvas
+
+
 def _render_page(emf: bytes, dpi: int, lo_cmd: str, pdftoppm_cmd: str) -> Image.Image:
-    """將單一 EMF 頁面渲染為 PIL Image（RGB），固定以 A4 尺寸輸出。"""
+    """將單一 EMF 頁面渲染為 PIL Image（RGB），letterbox 置中於 A4 畫布。"""
     target_w = max(1, round(A4_WIDTH_MM  * dpi / 25.4))
     target_h = max(1, round(A4_HEIGHT_MM * dpi / 25.4))
+    # 過取樣 DPI：pdftoppm 以更高 DPI 渲染，下採樣時 LANCZOS 帶來抗鋸齒銳利度
+    render_dpi = max(1, round(dpi * _RENDER_OVERSAMPLE))
 
     with tempfile.TemporaryDirectory() as _tmp:
         tmpdir = Path(_tmp)
         pdf_path = _emf_to_pdf(emf, tmpdir, lo_cmd)
-        png_path = _pdf_to_png(pdf_path, dpi, tmpdir, pdftoppm_cmd)
+        png_path = _pdf_to_png(pdf_path, render_dpi, tmpdir, pdftoppm_cmd)
 
         with Image.open(png_path) as img:
             rgb = img.convert("RGB")
-            # 若 pdftoppm 輸出尺寸非 A4（PDF 紙張尺寸不一定是 A4），統一縮放成 A4
-            if rgb.size != (target_w, target_h):
-                rgb = rgb.resize((target_w, target_h), Image.LANCZOS)
-            return rgb.copy()
+            return _fit_to_a4(rgb, target_w, target_h)
 
 
 # ── 公開介面 ───────────────────────────────────────────────────────────────────
