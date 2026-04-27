@@ -1,4 +1,8 @@
-"""JPG 渲染器（Linux 版本）：透過 LibreOffice headless 將 EMF 頁面轉為 PNG，再以 Pillow 縮放為 A4 JPG。"""
+"""JPG 渲染器（Linux 版本）：LibreOffice EMF→PDF → pdftoppm PDF→PNG @ 目標 DPI → Pillow 輸出 JPG。
+
+關鍵：先以 LibreOffice 將 EMF 轉為 PDF（保留向量），再用 pdftoppm 直接以目標 DPI
+光柵化。避免「先以低 DPI 轉 PNG 再放大」造成的模糊。
+"""
 from __future__ import annotations
 import shutil
 import subprocess
@@ -13,8 +17,9 @@ DEFAULT_DPI = 200
 A4_WIDTH_MM  = 210.0
 A4_HEIGHT_MM = 297.0
 
-# LibreOffice headless 轉檔逾時（秒）
+# 子程序逾時（秒）
 _LO_TIMEOUT = 120
+_PDFTOPPM_TIMEOUT = 60
 
 
 class JpgRenderError(Exception):
@@ -28,42 +33,81 @@ def _find_libreoffice() -> str:
         if path:
             return path
     raise JpgRenderError(
-        "找不到 LibreOffice。請安裝：sudo apt install libreoffice（Debian/Ubuntu）"
-        "或 sudo dnf install libreoffice（Fedora）"
+        "找不到 LibreOffice。請安裝：sudo apt install libreoffice"
     )
 
 
-def _render_page(emf: bytes, dpi: int, lo_cmd: str) -> Image.Image:
+def _find_pdftoppm() -> str:
+    """尋找 pdftoppm 執行檔路徑（poppler-utils）。"""
+    path = shutil.which("pdftoppm")
+    if path:
+        return path
+    raise JpgRenderError(
+        "找不到 pdftoppm。請安裝：sudo apt install poppler-utils"
+    )
+
+
+def _emf_to_pdf(emf: bytes, tmpdir: Path, lo_cmd: str) -> Path:
+    """以 LibreOffice 將 EMF 轉為 PDF（向量保留）。"""
+    emf_path = tmpdir / "page.emf"
+    emf_path.write_bytes(emf)
+
+    try:
+        result = subprocess.run(
+            [lo_cmd, "--headless", "--convert-to", "pdf",
+             "--outdir", str(tmpdir), str(emf_path)],
+            capture_output=True, text=True, timeout=_LO_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired as e:
+        raise JpgRenderError(f"LibreOffice 轉 PDF 逾時（{_LO_TIMEOUT}s）") from e
+
+    pdf_path = tmpdir / "page.pdf"
+    if not pdf_path.exists():
+        raise JpgRenderError(
+            f"LibreOffice EMF→PDF 轉換失敗（return code={result.returncode}）：\n"
+            f"stdout: {result.stdout}\nstderr: {result.stderr}"
+        )
+    return pdf_path
+
+
+def _pdf_to_png(pdf_path: Path, dpi: int, tmpdir: Path, pdftoppm_cmd: str) -> Path:
+    """以 pdftoppm 將 PDF 第一頁以指定 DPI 光柵化為 PNG。"""
+    out_prefix = tmpdir / "rendered"
+    try:
+        result = subprocess.run(
+            [pdftoppm_cmd, "-png", "-r", str(dpi), "-f", "1", "-l", "1",
+             str(pdf_path), str(out_prefix)],
+            capture_output=True, text=True, timeout=_PDFTOPPM_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired as e:
+        raise JpgRenderError(f"pdftoppm 逾時（{_PDFTOPPM_TIMEOUT}s）") from e
+
+    # pdftoppm 輸出檔名為 <prefix>-1.png 或 <prefix>-01.png（依總頁數位數）
+    candidates = sorted(tmpdir.glob("rendered-*.png"))
+    if not candidates:
+        raise JpgRenderError(
+            f"pdftoppm 未產生 PNG（return code={result.returncode}）：\n"
+            f"stdout: {result.stdout}\nstderr: {result.stderr}"
+        )
+    return candidates[0]
+
+
+def _render_page(emf: bytes, dpi: int, lo_cmd: str, pdftoppm_cmd: str) -> Image.Image:
     """將單一 EMF 頁面渲染為 PIL Image（RGB），固定以 A4 尺寸輸出。"""
     target_w = max(1, round(A4_WIDTH_MM  * dpi / 25.4))
     target_h = max(1, round(A4_HEIGHT_MM * dpi / 25.4))
 
     with tempfile.TemporaryDirectory() as _tmp:
         tmpdir = Path(_tmp)
-        emf_path = tmpdir / "page.emf"
-        emf_path.write_bytes(emf)
+        pdf_path = _emf_to_pdf(emf, tmpdir, lo_cmd)
+        png_path = _pdf_to_png(pdf_path, dpi, tmpdir, pdftoppm_cmd)
 
-        try:
-            result = subprocess.run(
-                [lo_cmd, "--headless", "--convert-to", "png",
-                 "--outdir", str(tmpdir), str(emf_path)],
-                capture_output=True, text=True, timeout=_LO_TIMEOUT,
-            )
-        except subprocess.TimeoutExpired as e:
-            raise JpgRenderError(f"LibreOffice 轉換逾時（{_LO_TIMEOUT}s）") from e
-
-        png_path = tmpdir / "page.png"
-        if not png_path.exists():
-            raise JpgRenderError(
-                f"LibreOffice 轉換失敗（return code={result.returncode}）：\n"
-                f"stdout: {result.stdout}\nstderr: {result.stderr}"
-            )
-
-        # 載入 PNG 並縮放為 A4 目標尺寸（LANCZOS 高品質縮放）
         with Image.open(png_path) as img:
             rgb = img.convert("RGB")
-            resized = rgb.resize((target_w, target_h), Image.LANCZOS)
-            return resized.copy()
+            # 若 pdftoppm 輸出尺寸非 A4（PDF 紙張尺寸不一定是 A4），統一縮放成 A4
+            if rgb.size != (target_w, target_h):
+                rgb = rgb.resize((target_w, target_h), Image.LANCZOS)
+            return rgb.copy()
 
 
 # ── 公開介面 ───────────────────────────────────────────────────────────────────
@@ -83,6 +127,7 @@ def render_jpg(
         raise JpgRenderError("沒有頁面可渲染")
 
     lo_cmd = _find_libreoffice()
+    pdftoppm_cmd = _find_pdftoppm()
 
     base = Path(output_base)
     if base.suffix.lower() == ".jpg":
@@ -92,13 +137,13 @@ def render_jpg(
 
     if len(pages) == 1:
         out_path = base.with_suffix(".jpg")
-        img = _render_page(pages[0], dpi, lo_cmd)
+        img = _render_page(pages[0], dpi, lo_cmd, pdftoppm_cmd)
         img.save(out_path, "JPEG", quality=quality, dpi=(dpi, dpi))
         output_paths.append(out_path)
     else:
         for idx, emf in enumerate(pages, start=1):
             out_path = base.parent / f"{base.stem}_{idx}.jpg"
-            img = _render_page(emf, dpi, lo_cmd)
+            img = _render_page(emf, dpi, lo_cmd, pdftoppm_cmd)
             img.save(out_path, "JPEG", quality=quality, dpi=(dpi, dpi))
             output_paths.append(out_path)
 
